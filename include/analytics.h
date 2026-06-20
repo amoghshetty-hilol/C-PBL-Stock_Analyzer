@@ -12,4 +12,7 @@ void rank_market_performers(Market *market);
 void export_analytical_report(const Stock *stock);
 void render_ascii_trend(const Stock *stock, int datapoints);
 
+// New Native GUI Extension
+void render_native_windows_graph(const Stock *stock, int datapoints);
+
 #endif /* ANALYTICS_H */
