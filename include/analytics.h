@@ -10,9 +10,6 @@ double calculate_rsi(const Stock *stock, int target_index, int period);
 void generate_enhanced_signal(const Stock *stock, char *output_signal, size_t buf_size);
 void rank_market_performers(Market *market);
 void export_analytical_report(const Stock *stock);
-void render_ascii_trend(const Stock *stock, int datapoints);
-
-// New Native GUI Extension
 void render_native_windows_graph(const Stock *stock, int datapoints);
 
 #endif /* ANALYTICS_H */

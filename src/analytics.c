@@ -3,7 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 #include <windows.h>
+
+extern void output_printf(const char *fmt, ...);
+Market *g_market = NULL;
 
 // Automatically instruct the MSVC Linker to include the Win32 GUI Subsystems
 #ifdef _MSC_VER
@@ -140,21 +144,18 @@ static int compare_performance(const void *a, const void *b) {
 
 void rank_market_performers(Market *market) {
     if (!market || market->stock_count <= 0) {
-        printf("No assets loaded in market database.\n");
+        output_printf("No assets loaded in market database.\n");
         return;
     }
 
     qsort(market->stocks, market->stock_count, sizeof(Stock*), compare_performance);
-    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     
-    SetConsoleTextAttribute(hConsole, 11);
-    printf("=======================================================================\n");
-    printf("                   30-DAY MARKET PERFORMANCE LEADERBOARD               \n");
-    printf("=======================================================================\n");
-    SetConsoleTextAttribute(hConsole, 7);
+    output_printf("=======================================================================\n");
+    output_printf("                   30-DAY MARKET PERFORMANCE LEADERBOARD               \n");
+    output_printf("=======================================================================\n");
 
-    printf("%-5s | %-10s | %-12s | %-15s | %-10s\n", "Rank", "Ticker", "Latest Close", "30d Growth %", "Signal");
-    printf("-----------------------------------------------------------------------\n");
+    output_printf("%-5s | %-10s | %-12s | %-15s | %-10s\n", "Rank", "Ticker", "Latest Close", "30d Growth %", "Signal");
+    output_printf("-----------------------------------------------------------------------\n");
 
     for (int i = 0; i < market->stock_count; i++) {
         Stock *s = market->stocks[i];
@@ -163,100 +164,25 @@ void rank_market_performers(Market *market) {
         char signal[SIGNAL_BUF];
         generate_enhanced_signal(s, signal, sizeof(signal));
 
-        printf("%-5d | %-10s | $%-11.2f | ", i + 1, s->ticker, latest_close);
+        output_printf("%-5d | %-10s | $%-11.2f | ", i + 1, s->ticker, latest_close);
 
         if (growth > 0) {
-            SetConsoleTextAttribute(hConsole, 2); 
-            printf("+%-14.2f%%", growth);
-        } else if (growth < 0) {
-            SetConsoleTextAttribute(hConsole, 4); 
-            printf("%-15.2f%%", growth);
+            output_printf("+%-14.2f%%", growth);
         } else {
-            SetConsoleTextAttribute(hConsole, 7); 
-            printf("%-15.2f%%", growth);
+            output_printf("%-15.2f%%", growth);
         }
-        SetConsoleTextAttribute(hConsole, 7);
-        printf(" | ");
+        output_printf(" | ");
 
         if (strcmp(signal, "BUY") == 0) {
-            SetConsoleTextAttribute(hConsole, 2); 
-            printf("[BUY]");
+            output_printf("[BUY]");
         } else if (strcmp(signal, "SELL") == 0) {
-            SetConsoleTextAttribute(hConsole, 4); 
-            printf("[SELL]");
+            output_printf("[SELL]");
         } else {
-            SetConsoleTextAttribute(hConsole, 7); 
-            printf("[HOLD]");
+            output_printf("[HOLD]");
         }
-        SetConsoleTextAttribute(hConsole, 7);
-        printf("\n");
+        output_printf("\n");
     }
-    printf("-----------------------------------------------------------------------\n");
-}
-
-void render_ascii_trend(const Stock *stock, int datapoints) {
-    if (!stock || stock->record_count <= 0 || datapoints <= 0) {
-        printf("No data to plot.\n");
-        return;
-    }
-
-    int start_idx = stock->record_count - datapoints;
-    if (start_idx < 0) start_idx = 0;
-    int num_points = stock->record_count - start_idx;
-
-    if (num_points <= 1) {
-        printf("Not enough data to plot a trend.\n");
-        return;
-    }
-
-    double min_val = stock->records[start_idx].close;
-    double max_val = stock->records[start_idx].close;
-    for (int i = 0; i < num_points; i++) {
-        double val = stock->records[start_idx + i].close;
-        if (val < min_val) min_val = val;
-        if (val > max_val) max_val = val;
-    }
-
-    if (max_val == min_val) {
-        min_val -= 1.0;
-        max_val += 1.0;
-    }
-
-    char grid[ROWS][MAX_COLS];
-    memset(grid, ' ', sizeof(grid));
-
-    for (int i = 0; i < num_points; i++) {
-        double val = stock->records[start_idx + i].close;
-        double ratio = (val - min_val) / (max_val - min_val);
-        int r = (ROWS - 1) - (int)(ratio * (ROWS - 1) + 0.5);
-        if (r < 0) r = 0;
-        if (r >= ROWS) r = ROWS - 1;
-        grid[r][i] = '*';
-    }
-
-    printf("\n%s Closing Trend Graph (%d days):\n", stock->ticker, num_points);
-    for (int r = 0; r < ROWS; r++) {
-        if (r == 0) {
-            printf("%9.2f | ", max_val);
-        } else if (r == ROWS - 1) {
-            printf("%9.2f | ", min_val);
-        } else if (r == ROWS / 2) {
-            printf("%9.2f | ", (max_val + min_val) / 2.0);
-        } else {
-            printf("          | ");
-        }
-
-        for (int c = 0; c < num_points; c++) {
-            printf("%c", grid[r][c]);
-        }
-        printf("\n");
-    }
-    printf("          +");
-    for (int i = 0; i < num_points; i++) {
-        printf("-");
-    }
-    printf("\n");
-    printf("           Date: %s to %s\n", stock->records[start_idx].date, stock->records[stock->record_count - 1].date);
+    output_printf("-----------------------------------------------------------------------\n");
 }
 
 // ============================================================================
@@ -492,7 +418,33 @@ void render_native_windows_graph(const Stock *stock, int datapoints) {
     UnregisterClassA("StockGraphWindowClass", hInstance);
 }
 
+static void format_commas(double val, char *buf, size_t buf_size) {
+    char temp[64];
+    snprintf(temp, sizeof(temp), "%.0f", val);
+    int len = (int)strlen(temp);
+    int commas = (len - 1) / 3;
+    int new_len = len + commas;
+    if ((size_t)new_len >= buf_size) {
+        strncpy(buf, temp, buf_size - 1);
+        buf[buf_size - 1] = '\0';
+        return;
+    }
+    int src = len - 1;
+    int dst = new_len - 1;
+    buf[new_len] = '\0';
+    int count = 0;
+    while (src >= 0) {
+        buf[dst--] = temp[src--];
+        count++;
+        if (count == 3 && src >= 0) {
+            buf[dst--] = ',';
+            count = 0;
+        }
+    }
+}
+
 void export_analytical_report(const Stock *stock) {
+    int datapoints = 60;
     if (!stock || stock->record_count <= 0) {
         printf("No stock data to export.\n");
         return;
@@ -550,64 +502,274 @@ void export_analytical_report(const Stock *stock) {
     fprintf(file, "  RSI-14:         %.2f\n", rsi);
     fprintf(file, "  30-day Growth:  %.2f%%\n", growth);
     fprintf(file, "  Current Signal: %s\n", signal);
+    fprintf(file, "--------------------------------------------------------\n");
+
+    // Compute summary statistics
+    double highest_close = stock->records[0].close;
+    double lowest_close = stock->records[0].close;
+    double sum_close = 0.0;
+    unsigned long sum_volume = 0;
+    int highest_idx = 0, lowest_idx = 0;
+
+    for (int i = 0; i < stock->record_count; i++) {
+        double c = stock->records[i].close;
+        sum_close += c;
+        sum_volume += stock->records[i].volume;
+        if (c > highest_close) { highest_close = c; highest_idx = i; }
+        if (c < lowest_close)  { lowest_close = c;  lowest_idx = i; }
+    }
+
+    double avg_close = sum_close / stock->record_count;
+    double avg_volume = (double)sum_volume / stock->record_count;
+    double price_range = highest_close - lowest_close;
+
+    // 30-day volatility = standard deviation of daily returns over 30 days
+    double volatility = 0.0;
+    int vol_start = stock->record_count - 30;
+    if (vol_start < 0) vol_start = 1;  // need at least 2 points
+    int vol_count = 0;
+    double sum_return = 0.0;
+    double sum_return_sq = 0.0;
+    for (int i = vol_start; i < stock->record_count; i++) {
+        double prev = stock->records[i-1].close;
+        double curr = stock->records[i].close;
+        if (prev != 0.0) {
+            double ret = (curr - prev) / prev;
+            sum_return += ret;
+            sum_return_sq += ret * ret;
+            vol_count++;
+        }
+    }
+    if (vol_count > 1) {
+        double mean = sum_return / vol_count;
+        volatility = sqrt((sum_return_sq - vol_count * mean * mean) / (vol_count - 1)) * 100.0;
+    }
+
+    char vol_buf[32];
+    format_commas(avg_volume, vol_buf, sizeof(vol_buf));
+
+    fprintf(file, "SUMMARY STATISTICS:\n");
+    fprintf(file, "  Highest Close:     $%.2f  (%s)\n", highest_close, stock->records[highest_idx].date);
+    fprintf(file, "  Lowest Close:      $%.2f  (%s)\n", lowest_close, stock->records[lowest_idx].date);
+    fprintf(file, "  Average Close:     $%.2f\n", avg_close);
+    fprintf(file, "  Average Volume:    %s shares\n", vol_buf);
+    fprintf(file, "  Price Range:       $%.2f\n", price_range);
+    fprintf(file, "  Volatility (30d):  %.2f%%\n", volatility);
     fprintf(file, "========================================================\n");
 
-    int datapoints = 40; 
-    int start_idx = stock->record_count - datapoints;
-    if (start_idx < 0) start_idx = 0;
-    int num_points = stock->record_count - start_idx;
+    fclose(file);
+    printf("Report successfully exported to: %s and chart to exports/%s_chart.bmp\n", filepath, stock->ticker);
 
-    if (num_points > 1) {
+    // --- Save GDI chart as BMP ---
+    {
+        int chart_width = 800;
+        int chart_height = 450;
+        int padding_left = 70;
+        int padding_right = 40;
+        int padding_top = 40;
+        int padding_bottom = 50;
+
+        // Calculate min/max same way as render_native_windows_graph
+        int start_idx = stock->record_count - datapoints;
+        if (start_idx < 0) start_idx = 0;
+        int num_points = stock->record_count - start_idx;
+        if (num_points <= 1) return;  // skip chart, not enough data
+
         double min_val = stock->records[start_idx].close;
         double max_val = stock->records[start_idx].close;
         for (int i = 0; i < num_points; i++) {
-            double val = stock->records[start_idx + i].close;
-            if (val < min_val) min_val = val;
-            if (val > max_val) max_val = val;
+            int idx = start_idx + i;
+            double v = stock->records[idx].close;
+            double s5 = calculate_sma(stock, idx, 5);
+            double s20 = calculate_sma(stock, idx, 20);
+            if (v < min_val) min_val = v;
+            if (v > max_val) max_val = v;
+            if (s5 > 0 && s5 < min_val) min_val = s5;
+            if (s5 > 0 && s5 > max_val) max_val = s5;
+            if (s20 > 0 && s20 < min_val) min_val = s20;
+            if (s20 > 0 && s20 > max_val) max_val = s20;
         }
-        if (max_val == min_val) {
-            min_val -= 1.0;
-            max_val += 1.0;
+        if (max_val == min_val) { min_val -= 1.0; max_val += 1.0; }
+
+        HDC hdcScreen = GetDC(NULL);
+        HDC hdcMem = CreateCompatibleDC(hdcScreen);
+        HBITMAP hBitmap = CreateCompatibleBitmap(hdcScreen, chart_width, chart_height);
+        SelectObject(hdcMem, hBitmap);
+
+        // White background
+        RECT rect = { 0, 0, chart_width, chart_height };
+        HBRUSH whiteBrush = CreateSolidBrush(RGB(255, 255, 255));
+        FillRect(hdcMem, &rect, whiteBrush);
+        DeleteObject(whiteBrush);
+
+        // --- Draw the chart lines (same as render_native_windows_graph) ---
+        // Price line
+        HPEN pricePen = CreatePen(PS_SOLID, 2, RGB(30, 100, 200));
+        HPEN sma5Pen = CreatePen(PS_DASH, 1, RGB(50, 180, 50));
+        HPEN sma20Pen = CreatePen(PS_DASH, 1, RGB(220, 50, 50));
+
+        // Map function: stock value → pixel Y
+        // chart_y = padding_top + (1 - ratio) * (chart_height - padding_top - padding_bottom)
+        // where ratio = (val - min_val) / (max_val - min_val)
+
+        // --- Draw price line ---
+        SelectObject(hdcMem, pricePen);
+        MoveToEx(hdcMem,
+            padding_left,
+            padding_top + (int)((1.0 - (stock->records[start_idx].close - min_val) / (max_val - min_val)) * (chart_height - padding_top - padding_bottom)),
+            NULL);
+        for (int i = 1; i < num_points; i++) {
+            double ratio = (stock->records[start_idx + i].close - min_val) / (max_val - min_val);
+            int x = padding_left + (int)((double)i / (num_points - 1) * (chart_width - padding_left - padding_right));
+            int y = padding_top + (int)((1.0 - ratio) * (chart_height - padding_top - padding_bottom));
+            LineTo(hdcMem, x, y);
         }
 
-        char grid[ROWS][MAX_COLS];
-        memset(grid, ' ', sizeof(grid));
-
+        // --- Draw SMA5 line ---
+        SelectObject(hdcMem, sma5Pen);
+        int first_sma5 = -1;
         for (int i = 0; i < num_points; i++) {
-            double val = stock->records[start_idx + i].close;
-            double ratio = (val - min_val) / (max_val - min_val);
-            int r = (ROWS - 1) - (int)(ratio * (ROWS - 1) + 0.5);
-            if (r < 0) r = 0;
-            if (r >= ROWS) r = ROWS - 1;
-            grid[r][i] = '*';
-        }
-
-        fprintf(file, "\n%s Closing Trend Graph (%d days):\n", stock->ticker, num_points);
-        for (int r = 0; r < ROWS; r++) {
-            if (r == 0) {
-                fprintf(file, "%9.2f | ", max_val);
-            } else if (r == ROWS - 1) {
-                fprintf(file, "%9.2f | ", min_val);
-            } else if (r == ROWS / 2) {
-                fprintf(file, "%9.2f | ", (max_val + min_val) / 2.0);
+            double s5 = calculate_sma(stock, start_idx + i, 5);
+            if (s5 <= 0.0) continue;
+            int x = padding_left + (int)((double)i / (num_points - 1) * (chart_width - padding_left - padding_right));
+            double ratio = (s5 - min_val) / (max_val - min_val);
+            int y = padding_top + (int)((1.0 - ratio) * (chart_height - padding_top - padding_bottom));
+            if (first_sma5 == -1) {
+                MoveToEx(hdcMem, x, y, NULL);
+                first_sma5 = 1;
             } else {
-                fprintf(file, "          | ");
+                LineTo(hdcMem, x, y);
             }
-
-            for (int c = 0; c < num_points; c++) {
-                fprintf(file, "%c", grid[r][c]);
-            }
-            fprintf(file, "\n");
         }
-        fprintf(file, "          +");
+
+        // --- Draw SMA20 line ---
+        SelectObject(hdcMem, sma20Pen);
+        int first_sma20 = -1;
         for (int i = 0; i < num_points; i++) {
-            fprintf(file, "-");
+            double s20 = calculate_sma(stock, start_idx + i, 20);
+            if (s20 <= 0.0) continue;
+            int x = padding_left + (int)((double)i / (num_points - 1) * (chart_width - padding_left - padding_right));
+            double ratio = (s20 - min_val) / (max_val - min_val);
+            int y = padding_top + (int)((1.0 - ratio) * (chart_height - padding_top - padding_bottom));
+            if (first_sma20 == -1) {
+                MoveToEx(hdcMem, x, y, NULL);
+                first_sma20 = 1;
+            } else {
+                LineTo(hdcMem, x, y);
+            }
         }
-        fprintf(file, "\n");
-        fprintf(file, "           Date: %s to %s\n", stock->records[start_idx].date, stock->records[stock->record_count - 1].date);
-        fprintf(file, "========================================================\n");
-    }
 
-    fclose(file);
-    printf("Report successfully exported to: %s\n", filepath);
+        // --- Draw axes ---
+        SelectObject(hdcMem, GetStockObject(BLACK_PEN));
+        // Y axis
+        MoveToEx(hdcMem, padding_left, padding_top, NULL);
+        LineTo(hdcMem, padding_left, chart_height - padding_bottom);
+        // X axis
+        MoveToEx(hdcMem, padding_left, chart_height - padding_bottom, NULL);
+        LineTo(hdcMem, chart_width - padding_right, chart_height - padding_bottom);
+
+        // --- Y axis labels ---
+        HFONT axisFont = CreateFontA(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET,
+                                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                                     FIXED_PITCH | FF_MODERN, "Courier New");
+        SelectObject(hdcMem, axisFont);
+        SetBkMode(hdcMem, TRANSPARENT);
+        SetTextColor(hdcMem, RGB(60, 60, 60));
+
+        char label[32];
+        snprintf(label, sizeof(label), "%.2f", max_val);
+        TextOutA(hdcMem, 2, padding_top, label, (int)strlen(label));
+        snprintf(label, sizeof(label), "%.2f", (max_val + min_val) / 2.0);
+        TextOutA(hdcMem, 2, padding_top + (chart_height - padding_top - padding_bottom) / 2 - 7, label, (int)strlen(label));
+        snprintf(label, sizeof(label), "%.2f", min_val);
+        TextOutA(hdcMem, 2, chart_height - padding_bottom - 14, label, (int)strlen(label));
+
+        // --- Title ---
+        HFONT titleFont = CreateFontA(18, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, ANSI_CHARSET,
+                                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                                      FIXED_PITCH | FF_MODERN, "Courier New");
+        SelectObject(hdcMem, titleFont);
+        SetTextColor(hdcMem, RGB(20, 20, 20));
+        char title[128];
+        snprintf(title, sizeof(title), "%s Closing Price Chart (%d days)", stock->ticker, num_points);
+        TextOutA(hdcMem, padding_left + 10, 8, title, (int)strlen(title));
+
+        // --- Legend ---
+        SelectObject(hdcMem, axisFont);
+        SetTextColor(hdcMem, RGB(30, 100, 200));
+        TextOutA(hdcMem, chart_width - padding_right - 250, chart_height - padding_bottom + 12, "Close Price (solid)", 18);
+        SelectObject(hdcMem, sma5Pen);
+        MoveToEx(hdcMem, chart_width - padding_right - 280, chart_height - padding_bottom + 28, NULL);
+        LineTo(hdcMem, chart_width - padding_right - 260, chart_height - padding_bottom + 28);
+        SelectObject(hdcMem, axisFont);
+        SetTextColor(hdcMem, RGB(50, 180, 50));
+        TextOutA(hdcMem, chart_width - padding_right - 130, chart_height - padding_bottom + 12, "SMA5 (dashed)", 13);
+        SelectObject(hdcMem, sma20Pen);
+        MoveToEx(hdcMem, chart_width - padding_right - 160, chart_height - padding_bottom + 28, NULL);
+        LineTo(hdcMem, chart_width - padding_right - 140, chart_height - padding_bottom + 28);
+
+        // --- Date labels at bottom ---
+        SelectObject(hdcMem, axisFont);
+        SetTextColor(hdcMem, RGB(100, 100, 100));
+        char start_date[32], end_date[32];
+        snprintf(start_date, sizeof(start_date), "Start: %s", stock->records[start_idx].date);
+        snprintf(end_date, sizeof(end_date), "End: %s", stock->records[stock->record_count - 1].date);
+        TextOutA(hdcMem, padding_left, chart_height - padding_bottom + 12, start_date, (int)strlen(start_date));
+        TextOutA(hdcMem, chart_width - padding_right - 110, chart_height - padding_bottom + 12, end_date, (int)strlen(end_date));
+
+        // --- Cleanup ---
+        DeleteObject(pricePen);
+        DeleteObject(sma5Pen);
+        DeleteObject(sma20Pen);
+        DeleteObject(axisFont);
+        DeleteObject(titleFont);
+        SelectObject(hdcMem, hBitmap);
+
+        // --- Save as BMP ---
+        BITMAP bmp;
+        GetObject(hBitmap, sizeof(bmp), &bmp);
+
+        BITMAPFILEHEADER bmfh = {0};
+        BITMAPINFOHEADER bmih = {0};
+
+        bmfh.bfType = 0x4D42;  // "BM"
+        bmfh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+        bmih.biSize = sizeof(BITMAPINFOHEADER);
+        bmih.biWidth = bmp.bmWidth;
+        bmih.biHeight = bmp.bmHeight;
+        bmih.biPlanes = 1;
+        bmih.biBitCount = 32;
+        bmih.biCompression = BI_RGB;
+        bmih.biSizeImage = bmp.bmWidth * bmp.bmHeight * 4;
+
+        bmfh.bfSize = bmfh.bfOffBits + bmih.biSizeImage;
+
+        char bmp_path[64];
+        snprintf(bmp_path, sizeof(bmp_path), "exports/%s_chart.bmp", stock->ticker);
+
+        DWORD bytes_written;
+        HANDLE hFile = CreateFileA(bmp_path, GENERIC_WRITE, 0, NULL,
+                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            WriteFile(hFile, &bmfh, sizeof(bmfh), &bytes_written, NULL);
+            WriteFile(hFile, &bmih, sizeof(bmih), &bytes_written, NULL);
+
+            // Get pixel data
+            DWORD pitch = bmp.bmWidth * 4;
+            BYTE *pixels = (BYTE*)malloc(pitch * bmp.bmHeight);
+            if (pixels) {
+                GetBitmapBits(hBitmap, pitch * bmp.bmHeight, pixels);
+                // BMP stores rows bottom-to-top, GDI stores top-to-bottom
+                // GDI top-to-bottom is fine for 32-bit with no compression
+                WriteFile(hFile, pixels, pitch * bmp.bmHeight, &bytes_written, NULL);
+                free(pixels);
+            }
+            CloseHandle(hFile);
+            printf("Chart saved: %s\n", bmp_path);
+        }
+
+        DeleteDC(hdcMem);
+        ReleaseDC(NULL, hdcScreen);
+        DeleteObject(hBitmap);
+    }
 }
