@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -Iinclude
-TARGET = stock_analyser.exe
+TARGET = stock.exe
 SRCS = src/main.c src/parser.c src/analytics.c
 OBJS = src/main.o src/parser.o src/analytics.o
 
@@ -8,8 +8,9 @@ OBJS = src/main.o src/parser.o src/analytics.o
 
 all: $(TARGET)
 
+# FIX: Appended -luser32 and -lgdi32 at the end of the linking instruction
 $(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS) -luser32 -lgdi32
 
 src/main.o: src/main.c include/common.h include/parser.h include/analytics.h
 	$(CC) $(CFLAGS) -c src/main.c -o src/main.o

@@ -57,10 +57,9 @@ Stock* load_stock_from_csv(const char *filepath, const char *ticker) {
     while (fgets(line, sizeof(line), file)) {
         if (is_header) {
             is_header = 0;
-            continue; // Skip header
+            continue; 
         }
 
-        // Tokenize Date,Open,High,Low,Close,Adj Close,Volume
         char *token;
         char *tokens[7];
         int token_count = 0;
@@ -72,7 +71,7 @@ Stock* load_stock_from_csv(const char *filepath, const char *ticker) {
         }
 
         if (token_count < 7) {
-            continue; // Skip incomplete or empty lines
+            continue; 
         }
 
         for (int i = 0; i < 7; i++) {

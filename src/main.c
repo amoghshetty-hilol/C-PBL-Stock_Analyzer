@@ -1,362 +1,217 @@
+#include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <windows.h>
-#include <conio.h>
-#include <locale.h>
 
 #include "common.h"
 #include "parser.h"
 #include "analytics.h"
 
-void set_cursor_position(int x, int y) {
-    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-    COORD coord = { (SHORT)x, (SHORT)y };
-    SetConsoleCursorPosition(hConsole, coord);
+// Unique GUI Element IDs
+#define IDC_TXT_FILEPATH    301
+#define IDC_TXT_TICKER      302
+#define IDC_BTN_LOAD        303
+#define IDC_BTN_PORTFOLIO   304
+#define IDC_BTN_GRAPH       305
+#define IDC_TXT_OUTPUT      306
+
+HWND hwndFilePath, hwndTicker, hwndOutputBox;
+Market *g_market = NULL;
+char g_gui_terminal_buffer[65536]; 
+
+void gui_printf(const char *format, ...) {
+    char temp[512];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(temp, sizeof(temp), format, args);
+    va_end(args);
+    
+    strcat(g_gui_terminal_buffer, temp);
+    SetWindowTextA(hwndOutputBox, g_gui_terminal_buffer);
 }
 
-void clear_console() {
-    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hConsole == INVALID_HANDLE_VALUE) return;
-
-    CONSOLE_SCREEN_BUFFER_INFO csbi;
-    DWORD count;
-    DWORD cellCount;
-    COORD homeCoords = { 0, 0 };
-
-    if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) return;
-    cellCount = csbi.dwSize.X * csbi.dwSize.Y;
-
-    // Fill the entire buffer with spaces
-    if (!FillConsoleOutputCharacterA(hConsole, ' ', cellCount, homeCoords, &count)) return;
-
-    // Fill the entire buffer with the current attributes
-    if (!FillConsoleOutputAttribute(hConsole, csbi.wAttributes, cellCount, homeCoords, &count)) return;
-
-    // Move the cursor home
-    SetConsoleCursorPosition(hConsole, homeCoords);
+void gui_clear() {
+    g_gui_terminal_buffer[0] = '\0';
+    SetWindowTextA(hwndOutputBox, "");
 }
 
-void display_portfolio_table(Market *market) {
-    if (!market || market->stock_count <= 0) {
-        printf("No assets loaded in market database.\n");
-        return;
-    }
+LRESULT CALLBACK MainGuiWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_CREATE: {
+            HFONT hNormalFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            HFONT hGridFont = CreateFontA(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, 
+                                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, 
+                                          FIXED_PITCH | FF_MODERN, "Courier New");
 
-    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+            // Input Fields
+            HWND lbl1 = CreateWindowExA(0, "STATIC", "CSV File Path:", WS_CHILD | WS_VISIBLE, 20, 22, 100, 20, hwnd, NULL, NULL, NULL);
+            SendMessageA(lbl1, WM_SETFONT, (WPARAM)hNormalFont, TRUE);
+            hwndFilePath = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "AAPL.csv", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 120, 20, 200, 24, hwnd, (HMENU)IDC_TXT_FILEPATH, NULL, NULL);
+            SendMessageA(hwndFilePath, WM_SETFONT, (WPARAM)hNormalFont, TRUE);
 
-    SetConsoleTextAttribute(hConsole, 11); // Cyan borders
-    printf("=================================================================================\n");
-    printf("                          PORTFOLIO COMPARISON TABLE                             \n");
-    printf("=================================================================================\n");
-    SetConsoleTextAttribute(hConsole, 7);
+            HWND lbl2 = CreateWindowExA(0, "STATIC", "Ticker Symbol:", WS_CHILD | WS_VISIBLE, 340, 22, 100, 20, hwnd, NULL, NULL, NULL);
+            SendMessageA(lbl2, WM_SETFONT, (WPARAM)hNormalFont, TRUE);
+            hwndTicker = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "AAPL", WS_CHILD | WS_VISIBLE | ES_UPPERCASE, 440, 20, 90, 24, hwnd, (HMENU)IDC_TXT_TICKER, NULL, NULL);
+            SendMessageA(hwndTicker, WM_SETFONT, (WPARAM)hNormalFont, TRUE);
 
-    printf("TICKER  |  RECORDS  |  LATEST      |  30d GROWTH  |  SMA5    |  SMA20   |  RSI  |  SIGNAL\n");
-    printf("--------+-----------+-------------+--------------+---------+----------+-------+---------\n");
+            // Action Buttons
+            HWND btnLoad = CreateWindowExA(0, "BUTTON", "Load Stock CSV Data", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 550, 18, 250, 28, hwnd, (HMENU)IDC_BTN_LOAD, NULL, NULL);
+            SendMessageA(btnLoad, WM_SETFONT, (WPARAM)hNormalFont, TRUE);
 
-    for (int i = 0; i < market->stock_count; i++) {
-        Stock *s = market->stocks[i];
-        int latest_idx = s->record_count - 1;
-        double latest_close = s->records[latest_idx].close;
-        double sma5 = calculate_sma(s, latest_idx, 5);
-        double sma20 = calculate_sma(s, latest_idx, 20);
-        double rsi = calculate_rsi(s, latest_idx, 14);
-        char signal[SIGNAL_BUF];
-        generate_enhanced_signal(s, signal, sizeof(signal));
+            HWND btnPortfolio = CreateWindowExA(0, "BUTTON", "Display Loaded Portfolio Grid", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 20, 60, 380, 32, hwnd, (HMENU)IDC_BTN_PORTFOLIO, NULL, NULL);
+            SendMessageA(btnPortfolio, WM_SETFONT, (WPARAM)hNormalFont, TRUE);
 
-        double growth = 0.0;
-        if (s->record_count > 1) {
-            int prev_idx = latest_idx - 30;
-            if (prev_idx < 0) prev_idx = 0;
-            double old_close = s->records[prev_idx].close;
-            if (old_close != 0.0) {
-                growth = ((latest_close - old_close) / old_close) * 100.0;
-            }
+            HWND btnGraph = CreateWindowExA(0, "BUTTON", "Open Advanced Visual GDI Chart Window", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 420, 60, 380, 32, hwnd, (HMENU)IDC_BTN_GRAPH, NULL, NULL);
+            SendMessageA(btnGraph, WM_SETFONT, (WPARAM)hNormalFont, TRUE);
+
+            // Main Display Box
+            hwndOutputBox = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL, 20, 110, 780, 470, hwnd, (HMENU)IDC_TXT_OUTPUT, NULL, NULL);
+            SendMessageA(hwndOutputBox, WM_SETFONT, (WPARAM)hGridFont, TRUE);
+
+            gui_printf("=========================================================================\r\n");
+            gui_printf("             STOCK ANALYSIS ENGINE - NATIVE WINDOWS FRONTEND             \r\n");
+            gui_printf("=========================================================================\r\n");
+            gui_printf("Status: Operational. No command prompt required.\r\n\r\n");
+            break;
         }
 
-        printf("%-8s|   %-8d|  $%-10.2f|  ", s->ticker, s->record_count, latest_close);
-        
-        if (growth > 0) {
-            SetConsoleTextAttribute(hConsole, 2); // Green
-            printf("+%-10.2f%%", growth);
-        } else if (growth < 0) {
-            SetConsoleTextAttribute(hConsole, 4); // Red
-            printf("%-11.2f%%", growth);
-        } else {
-            printf("%-11.2f%%", growth);
-        }
-        SetConsoleTextAttribute(hConsole, 7);
+        case WM_COMMAND: {
+            int controlId = LOWORD(wParam);
+            switch (controlId) {
+                case IDC_BTN_LOAD: {
+                    char path[260] = {0};
+                    char ticker[16] = {0};
+                    GetWindowTextA(hwndFilePath, path, sizeof(path));
+                    GetWindowTextA(hwndTicker, ticker, sizeof(ticker));
 
-        printf(" |  %-7.2f|  %-8.2f|  %-5.0f|  ", sma5, sma20, rsi);
+                    int overwrite_idx = -1;
+                    for (int i = 0; i < g_market->stock_count; i++) {
+                        if (_stricmp(g_market->stocks[i]->ticker, ticker) == 0) {
+                            overwrite_idx = i;
+                            break;
+                        }
+                    }
 
-        if (strcmp(signal, "BUY") == 0) {
-            SetConsoleTextAttribute(hConsole, 2); // Green
-            printf("BUY");
-        } else if (strcmp(signal, "SELL") == 0) {
-            SetConsoleTextAttribute(hConsole, 4); // Red
-            printf("SELL");
-        } else {
-            printf("HOLD");
-        }
-        SetConsoleTextAttribute(hConsole, 7);
-        printf("\n");
-    }
-    SetConsoleTextAttribute(hConsole, 11);
-    printf("=================================================================================\n");
-    SetConsoleTextAttribute(hConsole, 7);
-}
+                    gui_printf("Loading file: '%s'...\r\n", path);
+                    Stock *loaded = load_stock_from_csv(path, ticker);
+                    if (loaded) {
+                        if (overwrite_idx != -1) {
+                            free_stock(g_market->stocks[overwrite_idx]);
+                            g_market->stocks[overwrite_idx] = loaded;
+                            gui_printf("[Update] Re-loaded data memory fields for '%s'.\r\n\r\n", ticker);
+                        } else {
+                            if (g_market->stock_count >= g_market->max_capacity) {
+                                g_market->max_capacity *= 2;
+                                g_market->stocks = (Stock**)realloc(g_market->stocks, g_market->max_capacity * sizeof(Stock*));
+                            }
+                            g_market->stocks[g_market->stock_count++] = loaded;
+                            gui_printf("[Success] Asset '%s' loaded perfectly (%d records parsed).\r\n\r\n", ticker, loaded->record_count);
+                        }
+                    } else {
+                        gui_printf("[Error] Failed to open or parse file structure.\r\n\r\n");
+                    }
+                    break;
+                }
 
-void print_main_menu(Market *market) {
-    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+                case IDC_BTN_PORTFOLIO: {
+                    gui_clear();
+                    if (g_market->stock_count == 0) {
+                        gui_printf("No data records loaded in memory dashboard yet.\r\n");
+                        break;
+                    }
 
-    // Cyan borders
-    SetConsoleTextAttribute(hConsole, 11);
-    printf("=======================================================================\n");
-    printf("                  STOCK EXCHANGE ANALYSER - DASHBOARD                 \n");
-    printf("=======================================================================\n");
-    SetConsoleTextAttribute(hConsole, 7);
+                    gui_printf("==================================================================================\r\n");
+                    gui_printf("                       ACTIVE PORTFOLIO REALTIME INDICATOR MATRIX                 \r\n");
+                    gui_printf("==================================================================================\r\n");
+                    gui_printf("TICKER   | SESSIONS | LATEST CLOSE | SMA 5    | TRADING SIGNAL\r\n");
+                    gui_printf("---------+----------+--------------+----------+-----------------------------------\r\n");
 
-    printf(" Loaded Assets Count: ");
-    SetConsoleTextAttribute(hConsole, 11);
-    printf("%d\n", market->stock_count);
-    SetConsoleTextAttribute(hConsole, 7);
-    printf("-----------------------------------------------------------------------\n");
-    printf(" 1. Load Stock CSV Asset Dataset\n");
-    printf(" 2. View Loaded Assets Matrix & 30-Day Leaderboard\n");
-    printf(" 3. View Comprehensive Detailed Analytics & Visual ASCII Graph\n");
-    printf(" 4. Export Analytical Text Report to File\n");
-    printf(" 5. Clear Memory & Exit\n");
-    printf(" 6. View Full Portfolio Comparison Table\n");
-    printf("-----------------------------------------------------------------------\n");
-    printf(" Enter your choice (1-6): ");
-}
+                    for (int i = 0; i < g_market->stock_count; i++) {
+                        Stock *s = g_market->stocks[i];
+                        int last = s->record_count - 1;
+                        double close_v = s->records[last].close;
+                        double sm5 = calculate_sma(s, last, 5);
+                        
+                        char sig_str[256] = {0};
+                        generate_trading_signal(s, sig_str, sizeof(sig_str));
 
-int main() {
-    setlocale(LC_ALL, "");
-    SetConsoleOutputCP(65001);
-    SetConsoleCP(65001);
-    setvbuf(stdout, NULL, _IONBF, 0);
-    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-    SetConsoleTitleA("Stock Exchange Analyser");
+                        gui_printf("%-8s | %-8d | $%-11.2f | %-8.2f | %s\r\n", 
+                                   s->ticker, s->record_count, close_v, sm5, sig_str);
+                    }
+                    gui_printf("==================================================================================\r\n");
+                    break;
+                }
 
-    Market *market = (Market*)malloc(sizeof(Market));
-    if (!market) {
-        fprintf(stderr, "Fatal: failed to allocate market matrix.\n");
-        return 1;
-    }
-    market->stock_count = 0;
-    market->max_capacity = INITIAL_CAPACITY;
-    market->stocks = (Stock**)malloc(market->max_capacity * sizeof(Stock*));
-    if (!market->stocks) {
-        free(market);
-        fprintf(stderr, "Fatal: failed to allocate market stocks array.\n");
-        return 1;
-    }
+                case IDC_BTN_GRAPH: {
+                    char ticker[16] = {0};
+                    GetWindowTextA(hwndTicker, ticker, sizeof(ticker));
 
-    int run = 1;
-    clear_console();
+                    Stock *target = NULL;
+                    for (int i = 0; i < g_market->stock_count; i++) {
+                        if (_stricmp(g_market->stocks[i]->ticker, ticker) == 0) {
+                            target = g_market->stocks[i];
+                            break;
+                        }
+                    }
 
-    while (run) {
-        set_cursor_position(0, 0);
-        print_main_menu(market);
-
-        char ch = _getch();
-        if (ch == '1') {
-            clear_console();
-            
-            SetConsoleTextAttribute(hConsole, 11);
-            printf(">>> LOAD STOCK CSV ASSET DATASET <<<\n");
-            printf("------------------------------------\n");
-            SetConsoleTextAttribute(hConsole, 7);
-
-            char filepath[260];
-            char ticker[16];
-
-            printf("Enter CSV File Path (e.g. AAPL.csv): ");
-            if (fgets(filepath, sizeof(filepath), stdin)) {
-                filepath[strcspn(filepath, "\r\n")] = '\0';
-            }
-
-            printf("Enter Asset Ticker Symbol (e.g. AAPL): ");
-            if (fgets(ticker, sizeof(ticker), stdin)) {
-                ticker[strcspn(ticker, "\r\n")] = '\0';
-            }
-
-            int exists = -1;
-            for (int i = 0; i < market->stock_count; i++) {
-                if (_stricmp(market->stocks[i]->ticker, ticker) == 0) {
-                    exists = i;
+                    if (target) {
+                        gui_printf("[UI Pipeline] Requesting window focus change. Launching graph window for %s...\r\n", ticker);
+                        render_native_windows_graph(target, 60);
+                    } else {
+                        gui_printf("[Error] Graph aborted. Ticker symbol '%s' must be loaded first.\r\n\r\n", ticker);
+                    }
                     break;
                 }
             }
+            break;
+        }
 
-            printf("\nLoading asset '%s' from '%s'...\n", ticker, filepath);
-            Stock *loaded = load_stock_from_csv(filepath, ticker);
-            if (loaded) {
-                if (exists != -1) {
-                    free_stock(market->stocks[exists]);
-                    market->stocks[exists] = loaded;
-                    SetConsoleTextAttribute(hConsole, 2);
-                    printf("Success: Replaced existing stock '%s' with newly loaded data (%d records).\n", ticker, loaded->record_count);
-                } else {
-                    if (market->stock_count >= market->max_capacity) {
-                        int new_capacity = market->max_capacity * 2;
-                        Stock **new_stocks = (Stock**)realloc(market->stocks, new_capacity * sizeof(Stock*));
-                        if (!new_stocks) {
-                            SetConsoleTextAttribute(hConsole, 4);
-                            printf("Error: Memory allocation failure while expanding market capacity.\n");
-                            free_stock(loaded);
-                        } else {
-                            market->stocks = new_stocks;
-                            market->max_capacity = new_capacity;
-                        }
-                    }
-                    
-                    if (market->stock_count < market->max_capacity) {
-                        market->stocks[market->stock_count++] = loaded;
-                        SetConsoleTextAttribute(hConsole, 2);
-                        printf("Success: Loaded stock '%s' with %d records.\n", ticker, loaded->record_count);
-                    }
-                }
-            } else {
-                SetConsoleTextAttribute(hConsole, 4);
-                printf("Error: Failed to load CSV file. Check file path, headers, or structure.\n");
-            }
-            SetConsoleTextAttribute(hConsole, 7);
-            printf("\nPress any key to return to main menu...");
-            _getch();
-            clear_console();
-
-        } else if (ch == '2') {
-            clear_console();
-            rank_market_performers(market);
-            printf("\nPress any key to return to main menu...");
-            _getch();
-            clear_console();
-
-        } else if (ch == '3') {
-            clear_console();
-            SetConsoleTextAttribute(hConsole, 11);
-            printf(">>> DETAILED STOCK ANALYTICS & GRAPH <<<\n");
-            printf("----------------------------------------\n");
-            SetConsoleTextAttribute(hConsole, 7);
-
-            if (market->stock_count == 0) {
-                printf("No assets currently loaded. Please load a CSV first.\n");
-            } else {
-                char ticker[16];
-                printf("Enter Loaded Stock Ticker (e.g. AAPL): ");
-                if (fgets(ticker, sizeof(ticker), stdin)) {
-                    ticker[strcspn(ticker, "\r\n")] = '\0';
-                }
-
-                Stock *s = NULL;
-                for (int i = 0; i < market->stock_count; i++) {
-                    if (_stricmp(market->stocks[i]->ticker, ticker) == 0) {
-                        s = market->stocks[i];
-                        break;
-                    }
-                }
-
-                if (s) {
-                    double latest_close = s->records[s->record_count - 1].close;
-                    double sma5 = calculate_sma(s, s->record_count - 1, 5);
-                    double sma20 = calculate_sma(s, s->record_count - 1, 20);
-                    double rsi = calculate_rsi(s, s->record_count - 1, 14);
-                    char signal[SIGNAL_BUF];
-                    generate_enhanced_signal(s, signal, sizeof(signal));
-
-                    printf("\n");
-                    printf("Ticker:           %s\n", s->ticker);
-                    printf("Latest Session:   %s | Close: $%.2f\n", s->records[s->record_count - 1].date, latest_close);
-                    printf("5-day SMA:        $%.2f\n", sma5);
-                    printf("20-day SMA:       $%.2f\n", sma20);
-                    printf("RSI-14:           %.2f\n", rsi);
-                    printf("Current Signal:   ");
-                    if (strcmp(signal, "BUY") == 0) {
-                        SetConsoleTextAttribute(hConsole, 2);
-                        printf("%s\n", signal);
-                    } else if (strcmp(signal, "SELL") == 0) {
-                        SetConsoleTextAttribute(hConsole, 4);
-                        printf("%s\n", signal);
-                    } else {
-                        SetConsoleTextAttribute(hConsole, 7);
-                        printf("%s\n", signal);
-                    }
-                    SetConsoleTextAttribute(hConsole, 7);
-
-                    int datapoints = 40;
-                    char dp_str[16];
-                    printf("Enter number of data points to plot (e.g. 50): ");
-                    if (fgets(dp_str, sizeof(dp_str), stdin)) {
-                        int val = atoi(dp_str);
-                        if (val > 0) datapoints = val;
-                    }
-                    render_ascii_trend(s, datapoints);
-                } else {
-                    SetConsoleTextAttribute(hConsole, 4);
-                    printf("Error: Stock ticker '%s' not found in loaded memory.\n", ticker);
-                    SetConsoleTextAttribute(hConsole, 7);
-                }
-            }
-
-            printf("\nPress any key to return to main menu...");
-            _getch();
-            clear_console();
-
-        } else if (ch == '4') {
-            clear_console();
-            SetConsoleTextAttribute(hConsole, 11);
-            printf(">>> EXPORT ANALYTICAL TEXT REPORT <<<\n");
-            printf("-------------------------------------\n");
-            SetConsoleTextAttribute(hConsole, 7);
-
-            if (market->stock_count == 0) {
-                printf("No assets currently loaded. Please load a CSV first.\n");
-            } else {
-                char ticker[16];
-                printf("Enter Loaded Stock Ticker to Export (e.g. AAPL): ");
-                if (fgets(ticker, sizeof(ticker), stdin)) {
-                    ticker[strcspn(ticker, "\r\n")] = '\0';
-                }
-
-                Stock *s = NULL;
-                for (int i = 0; i < market->stock_count; i++) {
-                    if (_stricmp(market->stocks[i]->ticker, ticker) == 0) {
-                        s = market->stocks[i];
-                        break;
-                    }
-                }
-
-                if (s) {
-                    export_analytical_report(s);
-                } else {
-                    SetConsoleTextAttribute(hConsole, 4);
-                    printf("Error: Stock ticker '%s' not found in loaded memory.\n", ticker);
-                    SetConsoleTextAttribute(hConsole, 7);
-                }
-            }
-
-            printf("\nPress any key to return to main menu...");
-            _getch();
-            clear_console();
-
-        } else if (ch == '5') {
-            clear_console();
-            printf("Clearing memory matrices...\n");
-            free_market(market);
-            SetConsoleTextAttribute(hConsole, 10);
-            printf("Goodbye!\n");
-            SetConsoleTextAttribute(hConsole, 7);
-            run = 0;
-        } else if (ch == '6') {
-            clear_console();
-            display_portfolio_table(market);
-            printf("\nPress any key to return to main menu...");
-            _getch();
-            clear_console();
+        case WM_DESTROY: {
+            free_market(g_market);
+            PostQuitMessage(0);
+            return 0;
         }
     }
+    return DefWindowProcA(hwnd, msg, wParam, lParam);
+}
 
-    return 0;
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    g_market = (Market*)malloc(sizeof(Market));
+    g_market->stock_count = 0;
+    g_market->max_capacity = INITIAL_CAPACITY;
+    g_market->stocks = (Stock**)malloc(g_market->max_capacity * sizeof(Stock*));
+
+    WNDCLASSEXA wc = {0};
+    wc.cbSize = sizeof(WNDCLASSEXA);
+    wc.lpfnWndProc = MainGuiWndProc;
+    wc.hInstance = hInstance;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.lpszClassName = "MainFrontendStockDashboardClass";
+
+    if (!RegisterClassExA(&wc)) {
+        MessageBoxA(NULL, "Window Registration Execution Failure!", "Fatal Architecture Error", MB_ICONERROR | MB_OK);
+        return 1;
+    }
+
+    HWND hwnd = CreateWindowExA(
+        WS_EX_APPWINDOW,
+        "MainFrontendStockDashboardClass",
+        "Stock Trading Analysis Engine & Live Matrix Controls Panel",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        CW_USEDEFAULT, CW_USEDEFAULT, 835, 640,
+        NULL, NULL, hInstance, NULL
+    );
+
+    if (!hwnd) return 1;
+
+    ShowWindow(hwnd, nCmdShow);
+    UpdateWindow(hwnd);
+
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    return (int)msg.wParam;
 }
