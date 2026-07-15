@@ -60,14 +60,21 @@ Section "Install" SEC01
   ; Docs
   File "README.md"
 
-  ; Source code — for teammates to build/modify
-  File /r "src\*.c"
-  File /r "include\*.h"
-  File "Makefile"
-  File "installer.nsi"
-
   ; Exports directory placeholder
   CreateDirectory "$INSTDIR\exports"
+
+  ; Source code with folder structure preserved
+  SetOutPath "$INSTDIR\src"
+  File "src\main.c"
+  File "src\parser.c"
+  File "src\analytics.c"
+  SetOutPath "$INSTDIR\include"
+  File "include\common.h"
+  File "include\parser.h"
+  File "include\analytics.h"
+  SetOutPath "$INSTDIR"
+  File "Makefile"
+  File "installer.nsi"
 
   ; Shortcuts
   CreateDirectory "$SMPROGRAMS\Stock Exchange Analyser"
