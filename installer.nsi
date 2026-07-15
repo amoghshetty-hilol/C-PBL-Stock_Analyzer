@@ -56,10 +56,15 @@ Section "Install" SEC01
 
   ; Data-fetching scripts
   File "fetch_stock.py"
-  File "requirements.txt"
 
   ; Docs
   File "README.md"
+
+  ; Source code — for teammates to build/modify
+  File /r "src\*.c"
+  File /r "include\*.h"
+  File "Makefile"
+  File "installer.nsi"
 
   ; Exports directory placeholder
   CreateDirectory "$INSTDIR\exports"
@@ -91,9 +96,18 @@ Section "Uninstall"
   Delete "$INSTDIR\MSFT.csv"
   Delete "$INSTDIR\NVDA.csv"
   Delete "$INSTDIR\fetch_stock.py"
-  Delete "$INSTDIR\requirements.txt"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\uninst.exe"
+
+  ; Source code files
+  Delete "$INSTDIR\src\*.c"
+  Delete "$INSTDIR\include\*.h"
+  Delete "$INSTDIR\Makefile"
+  Delete "$INSTDIR\installer.nsi"
+  RMDir "$INSTDIR\src"
+  RMDir "$INSTDIR\include"
+
+  ; Generated exports
   RMDir /r "$INSTDIR\exports"
   RMDir "$INSTDIR"
 
